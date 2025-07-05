@@ -1,5 +1,8 @@
 from google.cloud import bigquery
 from google.oauth2 import service_account
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+import os
 import logging
 from mcp.server.models import InitializationOptions
 import mcp.types as types
@@ -27,16 +30,28 @@ logger.setLevel(logging.DEBUG)
 logger.info("Starting MCP BigQuery Server")
 
 class BigQueryDatabase:
-    def __init__(self, project: str, location: str, key_file: Optional[str], datasets_filter: list[str]):
+    def __init__(self, project: str, location: str, key_file: Optional[str], datasets_filter: list[str], use_oauth_flow: bool = False):
         """Initialize a BigQuery database client"""
-        logger.info(f"Initializing BigQuery client for project: {project}, location: {location}, key_file: {key_file}")
+        logger.info(f"Initializing BigQuery client for project: {project}, location: {location}, use_oauth_flow: {use_oauth_flow}")
         if not project:
             raise ValueError("Project is required")
         if not location:
             raise ValueError("Location is required")
         
-        credentials: service_account.Credentials | None = None
-        if key_file:
+        # Store these for potential reauth
+        self.project = project
+        self.location = location
+        self.key_file = key_file
+        self.datasets_filter = datasets_filter
+        self.use_oauth_flow = use_oauth_flow
+        
+        credentials = None
+        
+        if use_oauth_flow:
+            logger.info("Using OAuth flow for authentication")
+            credentials = self._get_oauth_credentials()
+        elif key_file:
+            logger.info("Using service account credentials from key file")
             try:
                 credentials_path = key_file
                 credentials = service_account.Credentials.from_service_account_file(
@@ -46,9 +61,84 @@ class BigQueryDatabase:
             except Exception as e:
                 logger.error(f"Error loading service account credentials: {e}")
                 raise ValueError(f"Invalid key file: {e}")
+        else:
+            logger.info("Using default credentials (Application Default Credentials)")
 
         self.client = bigquery.Client(credentials=credentials, project=project, location=location)
         self.datasets_filter = datasets_filter
+
+    def _get_oauth_credentials(self):
+        """Get OAuth2 credentials using installed app flow"""
+        # Define the scope for BigQuery access
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+        
+        # Check if we have a client secrets file
+        client_secrets_file = os.environ.get('GOOGLE_CLIENT_SECRETS_FILE', 'client_secrets.json')
+        
+        if not os.path.exists(client_secrets_file):
+            logger.error(f"Client secrets file not found: {client_secrets_file}")
+            raise ValueError(
+                f"OAuth flow requires a client secrets file. Please:\n"
+                f"1. Go to Google Cloud Console\n"
+                f"2. Create OAuth2 credentials (Desktop application type)\n"
+                f"3. Download the JSON file and save it as '{client_secrets_file}'\n"
+                f"4. Or set GOOGLE_CLIENT_SECRETS_FILE environment variable to point to your file"
+            )
+        
+        # Set up the OAuth flow
+        flow = InstalledAppFlow.from_client_secrets_file(
+            client_secrets_file, 
+            scopes=scopes
+        )
+        
+        # Check if we have saved credentials
+        token_file = os.environ.get('GOOGLE_TOKEN_FILE', 'token.json')
+        credentials = None
+        
+        if os.path.exists(token_file):
+            logger.info(f"Loading saved credentials from {token_file}")
+            try:
+                import json
+                with open(token_file, 'r') as f:
+                    token_data = json.load(f)
+                credentials = flow.credentials
+                credentials.token = token_data.get('token')
+                credentials.refresh_token = token_data.get('refresh_token')
+                credentials.token_uri = token_data.get('token_uri')
+                credentials.client_id = token_data.get('client_id')
+                credentials.client_secret = token_data.get('client_secret')
+                credentials.scopes = token_data.get('scopes')
+            except Exception as e:
+                logger.warning(f"Error loading saved credentials: {e}")
+                credentials = None
+        
+        # If credentials are not available or invalid, initiate OAuth flow
+        if not credentials or not credentials.valid:
+            if credentials and credentials.expired and credentials.refresh_token:
+                logger.info("Refreshing expired credentials")
+                credentials.refresh(Request())
+            else:
+                logger.info("Starting OAuth flow - your browser will open for authentication")
+                credentials = flow.run_local_server(port=0)
+            
+            # Save credentials for future use
+            logger.info(f"Saving credentials to {token_file}")
+            try:
+                import json
+                token_data = {
+                    'token': credentials.token,
+                    'refresh_token': credentials.refresh_token,
+                    'token_uri': credentials.token_uri,
+                    'client_id': credentials.client_id,
+                    'client_secret': credentials.client_secret,
+                    'scopes': credentials.scopes
+                }
+                with open(token_file, 'w') as f:
+                    json.dump(token_data, f)
+            except Exception as e:
+                logger.warning(f"Error saving credentials: {e}")
+        
+        return credentials
 
     def execute_query(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Execute a SQL query and return results as a list of dictionaries"""
@@ -108,10 +198,43 @@ class BigQueryDatabase:
             bigquery.ScalarQueryParameter("table_name", "STRING", table_id),
         ])
 
-async def main(project: str, location: str, key_file: Optional[str], datasets_filter: list[str]):
-    logger.info(f"Starting BigQuery MCP Server with project: {project} and location: {location}")
+    def reauth_oauth(self) -> str:
+        """Re-authenticate using OAuth flow by deleting saved tokens and forcing new authentication"""
+        if not self.use_oauth_flow:
+            raise ValueError("OAuth re-authentication is only available when using --oauth-flow")
+        
+        logger.info("Starting OAuth re-authentication")
+        
+        # Delete saved token file to force new authentication
+        token_file = os.environ.get('GOOGLE_TOKEN_FILE', 'token.json')
+        if os.path.exists(token_file):
+            try:
+                os.remove(token_file)
+                logger.info(f"Removed saved credentials from {token_file}")
+            except Exception as e:
+                logger.warning(f"Error removing token file: {e}")
+        
+        try:
+            # Force new OAuth flow
+            credentials = self._get_oauth_credentials()
+            
+            # Create new BigQuery client with fresh credentials
+            self.client = bigquery.Client(credentials=credentials, project=self.project, location=self.location)
+            
+            # Test the connection
+            list(self.client.list_datasets(max_results=1))
+            
+            logger.info("OAuth re-authentication successful")
+            return "✅ OAuth re-authentication successful! You are now connected with fresh credentials."
+            
+        except Exception as e:
+            logger.error(f"OAuth re-authentication failed: {e}")
+            raise ValueError(f"OAuth re-authentication failed: {e}")
 
-    db = BigQueryDatabase(project, location, key_file, datasets_filter)
+async def main(project: str, location: str, key_file: Optional[str], datasets_filter: list[str], use_oauth_flow: bool = False):
+    logger.info(f"Starting BigQuery MCP Server with project: {project}, location: {location}, oauth_flow: {use_oauth_flow}")
+
+    db = BigQueryDatabase(project, location, key_file, datasets_filter, use_oauth_flow)
     server = Server("bigquery-manager")
 
     # Register handlers
@@ -151,6 +274,14 @@ async def main(project: str, location: str, key_file: Optional[str], datasets_fi
                     "required": ["table_name"],
                 },
             ),
+            types.Tool(
+                name="reauth-oauth",
+                description="Re-authenticate using OAuth flow with fresh credentials. This will open your browser for authentication and is useful for switching Google accounts or refreshing permissions. Only available when using --oauth-flow.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -171,9 +302,13 @@ async def main(project: str, location: str, key_file: Optional[str], datasets_fi
                 results = db.describe_table(arguments["table_name"])
                 return [types.TextContent(type="text", text=str(results))]
 
-            if name == "execute-query":
+            elif name == "execute-query":
                 results = db.execute_query(arguments["query"])
                 return [types.TextContent(type="text", text=str(results))]
+
+            elif name == "reauth-oauth":
+                result = db.reauth_oauth()
+                return [types.TextContent(type="text", text=result)]
 
             else:
                 raise ValueError(f"Unknown tool: {name}")

@@ -11,6 +11,7 @@ def main():
     parser.add_argument('--location', help='BigQuery location', required=False)
     parser.add_argument('--key-file', help='BigQuery Service Account', required=False)
     parser.add_argument('--dataset', help='BigQuery dataset', required=False, action='append')
+    parser.add_argument('--oauth-flow', help='Use OAuth flow for authentication instead of service account', action='store_true')
     
     args = parser.parse_args()
 
@@ -24,7 +25,7 @@ def main():
         datasets_filter = os.environ.get('BIGQUERY_DATASETS', '').split(',')
         datasets_filter = [d.strip() for d in datasets_filter if d.strip()]
     
-    asyncio.run(server.main(project, location, key_file, datasets_filter))
+    asyncio.run(server.main(project, location, key_file, datasets_filter, args.oauth_flow))
 
 # Optionally expose other important items at package level
 __all__ = ['main', 'server']
