@@ -72,24 +72,41 @@ class BigQueryDatabase:
         # Define the scope for BigQuery access
         scopes = ["https://www.googleapis.com/auth/cloud-platform"]
         
-        # Check if we have a client secrets file
-        client_secrets_file = os.environ.get('GOOGLE_CLIENT_SECRETS_FILE', 'client_secrets.json')
+        # Check if we have client secrets (file path or JSON content)
+        client_secrets_env = os.environ.get('GOOGLE_CLIENT_SECRETS_FILE', 'client_secrets.json')
         
-        if not os.path.exists(client_secrets_file):
-            logger.error(f"Client secrets file not found: {client_secrets_file}")
-            raise ValueError(
-                f"OAuth flow requires a client secrets file. Please:\n"
-                f"1. Go to Google Cloud Console\n"
-                f"2. Create OAuth2 credentials (Desktop application type)\n"
-                f"3. Download the JSON file and save it as '{client_secrets_file}'\n"
-                f"4. Or set GOOGLE_CLIENT_SECRETS_FILE environment variable to point to your file"
+        flow = None
+        
+        # Try to determine if it's a file path or JSON content
+        if os.path.exists(client_secrets_env):
+            # It's a file path
+            logger.info(f"Using client secrets from file: {client_secrets_env}")
+            flow = InstalledAppFlow.from_client_secrets_file(
+                client_secrets_env, 
+                scopes=scopes
             )
-        
-        # Set up the OAuth flow
-        flow = InstalledAppFlow.from_client_secrets_file(
-            client_secrets_file, 
-            scopes=scopes
-        )
+        else:
+            # Try to parse as JSON content
+            try:
+                import json
+                client_secrets_data = json.loads(client_secrets_env)
+                logger.info("Using client secrets from JSON content in environment variable")
+                flow = InstalledAppFlow.from_client_config(
+                    client_secrets_data,
+                    scopes=scopes
+                )
+            except json.JSONDecodeError:
+                # Not valid JSON, assume it's a file path that doesn't exist
+                logger.error(f"Client secrets file not found and content is not valid JSON: {client_secrets_env}")
+                raise ValueError(
+                    f"OAuth flow requires client secrets. Please:\n"
+                    f"1. Go to Google Cloud Console\n"
+                    f"2. Create OAuth2 credentials (Desktop application type)\n"
+                    f"3. Either:\n"
+                    f"   a) Download the JSON file and save it as '{client_secrets_env}'\n"
+                    f"   b) Set GOOGLE_CLIENT_SECRETS_FILE environment variable to the JSON file path\n"
+                    f"   c) Set GOOGLE_CLIENT_SECRETS_FILE environment variable to the JSON content directly"
+                )
         
         # Check if we have saved credentials
         token_file = os.environ.get('GOOGLE_TOKEN_FILE', 'token.json')
