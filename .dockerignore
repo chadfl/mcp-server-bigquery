@@ -1,0 +1,64 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache
+.coverage
+htmlcov/
+.tox/
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Documentation
+*.md
+!README.md
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Node modules (if any)
+node_modules/
+
+# Logs
+*.log
+
+# Original Dockerfile (we use Dockerfile.cloudrun)
+Dockerfile
+
+# Development files
+.env.local
+.env.development
+client_secrets.json
+token.json
+
+# Test files
+tests/
+test_*.py
+*_test.py 

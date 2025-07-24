@@ -1,0 +1,67 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: mcp-bigquery-server
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/execution-environment: gen2
+spec:
+  template:
+    metadata:
+      annotations:
+        # Set timeout to 3600 seconds (1 hour) for long-running connections
+        run.googleapis.com/timeout: "3600s"
+        # Allow up to 1000 concurrent requests per instance
+        run.googleapis.com/execution-environment: gen2
+        autoscaling.knative.dev/maxScale: "100"
+        autoscaling.knative.dev/minScale: "0"
+    spec:
+      containerConcurrency: 1000
+      timeoutSeconds: 3600
+      containers:
+      - image: gcr.io/PROJECT_ID/mcp-bigquery-server:latest
+        ports:
+        - name: http1
+          containerPort: 8080
+        env:
+        # Required BigQuery configuration
+        - name: BIGQUERY_PROJECT
+          value: "YOUR_PROJECT_ID"
+        - name: BIGQUERY_LOCATION
+          value: "US"
+        # Optional: Restrict to specific datasets
+        - name: BIGQUERY_DATASETS
+          value: "dataset1,dataset2"
+        # Authentication method - choose one:
+        # Option 1: Service Account Key (not recommended for production)
+        # - name: BIGQUERY_KEY_FILE
+        #   value: "/path/to/service-account-key.json"
+        # Option 2: OAuth Flow (requires client secrets)
+        # - name: BIGQUERY_USE_OAUTH_FLOW
+        #   value: "true"
+        # - name: GOOGLE_CLIENT_SECRETS_FILE
+        #   value: "client_secrets.json"
+        # Option 3: Default Application Credentials (recommended)
+        # No additional env vars needed - uses Cloud Run's default service account
+        resources:
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+          requests:
+            cpu: "1"
+            memory: "512Mi"
+        # Health check for the SSE endpoint
+        livenessProbe:
+          httpGet:
+            path: /sse
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /sse
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5 

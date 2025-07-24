@@ -11,6 +11,7 @@ wheels/
 
 # IJ files
 .idea
+.env
 
 # OAuth credentials and tokens (user-specific - never commit these)
 client_secrets.json

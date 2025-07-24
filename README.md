@@ -85,6 +85,139 @@ This ensures:
 
 Use service account credentials by providing the `--key-file` argument or setting `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
 
+## Cloud Run Deployment
+
+Deploy the MCP BigQuery server to Google Cloud Run for multi-user access via ChatGPT and Claude Desktop. This setup uses [Supergateway](https://github.com/supercorp-ai/supergateway) to convert the stdio MCP server to HTTP SSE.
+
+### Quick Deploy
+
+1. **Prerequisites:**
+   ```bash
+   # Install Google Cloud CLI
+   # https://cloud.google.com/sdk/docs/install
+   
+   # Authenticate and set project
+   gcloud auth login
+   gcloud config set project YOUR_PROJECT_ID
+   ```
+
+2. **Deploy with automated script:**
+   ```bash
+   ./deploy.sh
+   ```
+   The script will prompt you for configuration and handle the entire deployment process.
+
+### Manual Deployment
+
+1. **Build and deploy the Docker image:**
+   ```bash
+   # Set your project ID
+   export PROJECT_ID=your-gcp-project-id
+   export SERVICE_NAME=mcp-bigquery-server
+   export REGION=us-central1
+   
+   # Build the image
+   gcloud builds submit \
+     --tag gcr.io/$PROJECT_ID/$SERVICE_NAME \
+     --file Dockerfile.cloudrun
+   
+   # Deploy to Cloud Run
+   gcloud run deploy $SERVICE_NAME \
+     --image gcr.io/$PROJECT_ID/$SERVICE_NAME \
+     --platform managed \
+     --region $REGION \
+     --allow-unauthenticated \
+     --set-env-vars "BIGQUERY_PROJECT=$PROJECT_ID,BIGQUERY_LOCATION=US" \
+     --timeout 3600s \
+     --concurrency 1000 \
+     --port 8080
+   ```
+
+2. **Get the service URL:**
+   ```bash
+   gcloud run services describe $SERVICE_NAME \
+     --platform managed \
+     --region $REGION \
+     --format 'value(status.url)'
+   ```
+
+### Usage with AI Clients
+
+Once deployed, you can use the service with various AI clients:
+
+#### ChatGPT/Claude Desktop Configuration
+
+```json
+{
+  "mcpServers": {
+    "bigquery": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "supergateway",
+        "--sse",
+        "https://your-service-url.run.app/sse"
+      ]
+    }
+  }
+}
+```
+
+#### Testing the Deployment
+
+```bash
+# Test SSE endpoint
+curl -N https://your-service-url.run.app/sse
+
+# Test with Supergateway locally
+npx -y supergateway --sse "https://your-service-url.run.app/sse"
+```
+
+### Environment Variables for Cloud Run
+
+Configure the following environment variables in your Cloud Run service:
+
+| Variable | Required | Description | Example |
+|----------|----------|-------------|---------|
+| `BIGQUERY_PROJECT` | Yes | GCP project ID | `my-project-123` |
+| `BIGQUERY_LOCATION` | Yes | BigQuery location | `US` or `europe-west1` |
+| `BIGQUERY_DATASETS` | No | Comma-separated list of datasets | `dataset1,dataset2` |
+| `BIGQUERY_USE_OAUTH_FLOW` | No | Enable OAuth flow | `true` |
+| `GOOGLE_CLIENT_SECRETS_FILE` | OAuth only | Client secrets for OAuth | `client_secrets.json` |
+
+### Authentication for Cloud Run
+
+**Recommended: Default Application Credentials**
+- Use Cloud Run's default service account
+- Grant BigQuery permissions to the service account
+- No additional configuration needed
+
+**Advanced: OAuth Flow**
+- Set `BIGQUERY_USE_OAUTH_FLOW=true`
+- Provide client secrets via Secret Manager or environment variables
+- Each user authenticates individually
+
+### Scaling and Performance
+
+The Cloud Run configuration supports:
+- **Auto-scaling**: 0-100 instances based on demand
+- **Concurrency**: Up to 1000 concurrent connections per instance
+- **Timeout**: 1 hour for long-running queries
+- **Resources**: 1-2 CPU cores, 512Mi-2Gi memory
+
+### Monitoring and Logs
+
+```bash
+# View logs
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=$SERVICE_NAME" \
+  --project=$PROJECT_ID \
+  --limit=50 \
+  --format="table(timestamp,textPayload)"
+
+# Monitor metrics
+gcloud monitoring metrics list --filter="resource.type=cloud_run_revision"
+```
+
 ## Quickstart
 
 ### Install
